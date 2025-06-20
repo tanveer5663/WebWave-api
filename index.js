@@ -14,7 +14,7 @@ const PORT = process.env.PORT || 9000;
 app.use(cors());
 
 // Initialize Redis client
-const redis = new Redis(process.env.REDIS);
+const redis = new Redis("rediss://default:ATrxAAIjcDFlZDBlYzgyNTc4MDI0NmU1YmUxMTU2NThjOGI3YjgxNXAxMA@notable-elephant-15089.upstash.io:6379");
 
 // Create a Socket.IO server
 const io = new Server(server, {
