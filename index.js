@@ -14,7 +14,9 @@ const PORT = process.env.PORT || 9000;
 app.use(cors());
 
 // Initialize Redis client
-const redis = new Redis("rediss://default:ATrxAAIjcDFlZDBlYzgyNTc4MDI0NmU1YmUxMTU2NThjOGI3YjgxNXAxMA@notable-elephant-15089.upstash.io:6379");
+const redis = new Redis(
+  "rediss://default:ATrxAAIjcDFlZDBlYzgyNTc4MDI0NmU1YmUxMTU2NThjOGI3YjgxNXAxMA@notable-elephant-15089.upstash.io:6379"
+);
 
 // Create a Socket.IO server
 const io = new Server(server, {
@@ -54,10 +56,12 @@ app.get("/", async (req, res) => {
 });
 
 app.post("/project", async (req, res) => {
-  const { userId, gitURL } = req.body;
+  let { userId, gitURL } = req.body;
   if (!userId || !gitURL) {
     return res.status(400).json({ error: "User ID and Git URL are required!" });
   }
+
+  gitURL = normalizeGitURL(gitURL);
 
   const snapshot = await db
     .collection("projects")
@@ -128,6 +132,10 @@ app.post("/deploy", async (req, res) => {
             environment: [
               { name: "GIT_REPOSITORY__URL", value: gitURL },
               { name: "PROJECT_ID", value: projectId },
+              { name: "ACCESSKEYID", value: process.env.ACCESSKEYID },
+              { name: "SECRETACCESSKEY", value: process.env.SECRETACCESSKEY },
+              { name: "REDIS", value: process.env.REDIS },
+
               ,
             ],
           },
@@ -136,7 +144,8 @@ app.post("/deploy", async (req, res) => {
     });
     await ecsClient.send(command);
 
-    await streamLogsToClients(projectId);
+    const resp = await streamLogsToClients(projectId);
+    console.log("all logs complentd", resp);
 
     const user = getGitUser(gitURL);
     const newUrl = `https://vercel-clone-30.s3.ap-south-1.amazonaws.com/${user.username}/${user.repoName}/index.html`;
@@ -150,6 +159,12 @@ app.post("/deploy", async (req, res) => {
     });
   } catch (error) {
     console.log(error);
+    if (error == "No vite.config.js or react-scripts found in package.json") {
+      return res.status(400).json({
+        error:
+          "you cannot deploy this project, vite.config.js or react-scripts not found in package.json",
+      });
+    }
     return res.status(400).json({
       error: error,
     });
@@ -165,47 +180,57 @@ function getGitUser(url) {
   return { username, repoName };
 }
 async function streamLogsToClients(PROJECT_ID) {
-  const streamKey = `logs:${PROJECT_ID}`;
-  let lastId = "$";
-  console.log("started Log function");
-  while (true) {
+  return new Promise(async (resolve, reject) => {
+    const streamKey = `logs:${PROJECT_ID}`;
+    let lastId = "$"; // start from beginning, or "$" for only new logs
+    console.log("started Log function");
+
     try {
-      const result = await redis.xread(
-        "BLOCK",
-        0,
-        "STREAMS",
-        streamKey,
-        lastId
-      );
+      while (true) {
+        const result = await redis.xread(
+          "BLOCK",
+          0,
+          "STREAMS",
+          streamKey,
+          lastId
+        );
 
-      if (result) {
-        const [[key, entries]] = result;
-        console.log("result", result);
-        for (const [id, fields] of entries) {
-          lastId = id;
-          console.log("lastId", lastId);
+        if (result) {
+          const [[key, entries]] = result;
+          for (const [id, fields] of entries) {
+            lastId = id;
 
-          // Extract log message
-          const log = fields[1];
-          console.log(log); // fields is like ["log", "message here"]
-          io.to(PROJECT_ID).emit("log", { log });
-          console.log("**************************************");
-          // Send to all connected WebSocket clients
-          if (log == "Done") {
-            return resolve();
+            const log = fields[1];
+            console.log("log:", log);
+            io.to(PROJECT_ID).emit("log", { log });
+
+            if (log === "Done") {
+              return resolve();
+            } else if (
+              log == "No vite.config.js or react-scripts found in package.json"
+            ) {
+              return reject(
+                "No vite.config.js or react-scripts found in package.json"
+              );
+            }
           }
+        } else {
+          console.log("No logs found");
+          io.to(PROJECT_ID).emit("log", { log: "No logs found." });
+          return resolve();
         }
-      } else {
-        console.log("not found log");
-        io.to(PROJECT_ID).emit("log", "not found log");
-
-        return resolve();
       }
     } catch (err) {
-      console.error("Error reading from Redis stream:", err);
-      return resolve();
+      console.error("Error reading from Redis stream:");
+      return reject("Error reading from Redis stream:");
     }
+  });
+}
+function normalizeGitURL(url) {
+  if (!url.endsWith(".git")) {
+    return url + ".git";
   }
+  return url;
 }
 
 server.listen(PORT, () => console.log(`API Server Running..${PORT}`));
