@@ -182,7 +182,7 @@ function getGitUser(url) {
 async function streamLogsToClients(PROJECT_ID) {
   return new Promise(async (resolve, reject) => {
     const streamKey = `logs:${PROJECT_ID}`;
-    let lastId = "$"; // start from beginning, or "$" for only new logs
+    let lastId = "0"; // start from beginning, or "$" for only new logs
     console.log("started Log function");
 
     try {
